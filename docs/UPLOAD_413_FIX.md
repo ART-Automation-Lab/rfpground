@@ -43,6 +43,7 @@ Pending deployment and real browser verification. Do not interpret local test re
 
 ## Exact files changed
 
+- `.vercelignore` (excludes local credentials, scratch output and PDF test inputs from deployment)
 - `app/api/documents/route.ts`
 - `app/api/documents/[documentId]/complete/route.ts`
 - `app/api/process-document/route.ts`
