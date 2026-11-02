@@ -17,6 +17,7 @@ The TUS client uses 6 MiB chunks, authenticated session credentials refreshed be
 - New cleanup-path table has RLS enabled, no client policies, and privileges only for the service role. Its trigger function lives in `private` with PUBLIC execution revoked.
 - Supabase security advisors before and after migration returned the same three existing warnings (public `rls_auto_enable()` execution for anon/authenticated and leaked-password protection disabled); no new findings.
 - Migration `20261102194718` applied and recorded in migration history.
+- Production's existing `INNGEST_DEV` setting initially selected development mode and prevented cloud sync. With explicit user approval, production now uses `false`; the shared variable was split so Preview retains development mode (`true`). The clean checkout was redeployed and Inngest returned `Successfully registered`. Cloud's API confirms the existing analysis trigger and new hourly cleanup cron are registered. No analysis implementation or quota logic changed.
 
 ## Lifecycle and recovery
 
@@ -36,10 +37,23 @@ Authorization can be renewed for 24 hours after creation, and completion recover
 - Covers authorization idempotency, unverified extraction rejection, foreign completion rejection, forged-verification rejection, wrong-size-object rejection, existing deletion, client rejection over 10 MiB, interruption/refresh/resume, lost completion response, duplicate completion, private object isolation, library visibility, exclusive extraction leases, stale lease recovery, and retry after simulated dispatch failure.
 - Run locally: `node --env-file=.env.local tests/document-upload.cjs` against a built app at `http://127.0.0.1:3000`.
 - Production: set `UPLOAD_TEST_BASE_URL=https://www.rfpground.com` and add `--analysis` to exercise the real analysis pipeline and quota consumption. Test cleanup removes Storage objects before deleting disposable users.
+- Production cleanup regression: `node --env-file=.env.local tests/upload-cleanup.cjs` invokes the registered cron with disposable stale-upload and late-orphan fixtures, then confirms both objects and corresponding records are removed. Passed against Inngest Cloud.
 
 ## Production result
 
-Pending deployment and real browser verification. Do not interpret local test results as production verification.
+**VERIFIED on 3 November 2026 (Asia/Kolkata)** against `https://www.rfpground.com`.
+
+- Clean-checkout production deployment: `dpl_Ffx1BVLUqrAUBRbgtoTkVv5PSfgM`, deployed source commit `fc71734` on `fix/direct-storage-uploads`. Vercel URL: `https://rfpground-98jjcag9i-chiranjeevi005s-projects.vercel.app`.
+- Actual valid tender PDF: `6565dbb36c16dTenderdoc144.pdf`, **6,774,486 bytes**, greater than Vercel's request limit and below the 10 MiB product limit.
+- Browser TUS POST/PATCH requests went directly to `dcicrwkyxqacaronwato.storage.supabase.co`. `/api/documents` received **135-byte JSON metadata**, never a PDF body. No `FUNCTION_PAYLOAD_TOO_LARGE` occurred.
+- Deliberately interrupted the final upload chunk, refreshed, reselected the same file and resumed. Deliberately lost a successful server completion response, then recovered by retrying. Storage persisted exactly one PDF and the server verified it.
+- Existing library contained one document; **283 pages** extracted. Duplicate completion requests succeeded without duplicate documents. Cross-user completion/download failed. Oversized PDF was rejected in the browser before any upload request.
+- Final production browser test exited **0**. Analysis run `86c0836e-6de2-43ad-a13b-74cf63e349af` completed for test document `25ffadb2-0e18-4b1d-aff7-51682754b46a`. Exactly **one** entitlement ledger entry reached **CONSUMED**. Existing workspace returned HTTP 200 and displayed **Analysis Complete**, 283 pages and 86 findings.
+- Workspace screenshot: local `scratch/upload-production-workspace.png`. Disposable test PDFs were removed before deleting test accounts; the test document is intentionally no longer present in the live library.
+- The earlier production attempt under the previous development-mode configuration uploaded/extracted successfully but timed out waiting for analysis. Its disposable account was also cleaned up. The successful result above is from the final cloud-mode deployment.
+- A real invocation of the registered cleanup function removed a stale pending upload/document and a simulated late orphan/tombstone. Result: local `scratch/upload-cleanup-test.json`.
+
+The original two overlapping browser-test processes wrote the same summary filename; the older timeout overwrote the successful run's JSON summary after it exited. The final success is recorded by its exit code, PASS output, observed database IDs above and the workspace screenshot. The harness now writes per-document evidence files and a separate latest-success file to prevent that collision.
 
 ## Exact files changed
 
@@ -59,6 +73,7 @@ Pending deployment and real browser verification. Do not interpret local test re
 - `package.json`
 - `package-lock.json`
 - `tests/document-upload.cjs`
+- `tests/upload-cleanup.cjs`
 - `docs/UPLOAD_413_FIX.md`
 
 Billing, entitlements, quota reservation/finalization, AI analysis implementation and user deletion code were not changed. Upload cleanup extends orphan handling while preserving the storage-first deletion invariant. The user's untracked PDF is a test input and is not included in the change.

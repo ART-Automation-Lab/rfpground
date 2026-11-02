@@ -178,8 +178,10 @@ async function main() {
     assert.equal(ledger[0].status, 'CONSUMED');
     evidence.ledger = ledger;
     check('Existing analysis completes and exactly one quota reservation is consumed');
-    await page.goto(`${base}/documents/${doc.id}`);
+    const workspace = await page.goto(`${base}/documents/${doc.id}`);
+    assert.equal(workspace.status(), 200);
     assert.equal(new URL(page.url()).pathname, `/documents/${doc.id}`);
+    await page.screenshot({ path: 'scratch/upload-production-workspace.png', fullPage: true });
     check('Existing document workspace opens');
   } else {
     await admin.from('documents').update({ status: 'PROCESSING', extraction_lease_until: new Date(Date.now() + 90000).toISOString() }).eq('id', doc.id);
@@ -212,5 +214,10 @@ main().catch(error => { evidence.error = error.message; console.error(error); pr
     if (result.error) { console.error('Cleanup user failure:', result.error.message); process.exitCode = 1; }
   }
   fs.mkdirSync('scratch', { recursive: true });
-  fs.writeFileSync(`scratch/upload-test-${new URL(base).hostname}.json`, JSON.stringify(evidence, null, 2));
+  const evidencePath = `scratch/upload-test-${new URL(base).hostname}-${evidence.documentId || randomUUID()}.json`;
+  fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2));
+  if (!evidence.error && !process.exitCode) {
+    fs.writeFileSync(`scratch/upload-test-${new URL(base).hostname}-latest-success.json`, JSON.stringify(evidence, null, 2));
+  }
+  console.log('Evidence:', evidencePath);
 });
