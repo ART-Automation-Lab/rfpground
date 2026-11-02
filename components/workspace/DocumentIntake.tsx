@@ -2,6 +2,8 @@
 
 import React, { useState, useRef } from 'react';
 import Link from 'next/link';
+import { uploadDocument } from '@/lib/client/document-upload';
+import { validatePdf } from '@/lib/uploads';
 import { 
   UploadCloud, 
   Loader2, 
@@ -10,8 +12,6 @@ import {
   Ban, 
   AlertCircle, 
   ArrowRight, 
-  FileText,
-  X
 } from 'lucide-react';
 
 interface DocumentIntakeProps {
@@ -41,30 +41,22 @@ export default function DocumentIntake({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [docId, setDocId] = useState<string | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
+  const [, setRunId] = useState<string | null>(null);
   const [ambiguityReason, setAmbiguityReason] = useState<string | null>(null);
   const [extractedPagesCount, setExtractedPagesCount] = useState<number>(0);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadVerified, setUploadVerified] = useState(false);
+  const [extractionCompleted, setExtractionCompleted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Validate and select file
   const handleFileSelect = (file: File) => {
     setErrorMessage(null);
-
-    // 1. Validate PDF format
-    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-      setErrorMessage('Invalid file format. Only PDF documents are supported.');
-      return;
-    }
-
-    // 2. Validate file size (<= 10MB)
-    const MAX_BYTES = 10 * 1024 * 1024; // 10MB
-    if (file.size > MAX_BYTES) {
-      const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-      setErrorMessage(`File exceeds 10 MB limit (${sizeMB} MB). Please upload a smaller PDF.`);
-      return;
-    }
+    setSelectedFile(null);
+    const invalid = validatePdf(file.name, file.size, file.type);
+    if (invalid) { setErrorMessage(invalid); return; }
 
     setSelectedFile(file);
   };
@@ -76,33 +68,21 @@ export default function DocumentIntake({
     try {
       setErrorMessage(null);
       setStage('UPLOADING');
-      setStatusMessage('Uploading PDF...');
-
-      // 1. Upload file via server API (atomic storage upload and document record creation)
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-
-      const uploadRes = await fetch('/api/documents', {
-        method: 'POST',
-        body: formData,
+      setUploadVerified(false);
+      setExtractionCompleted(false);
+      setUploadProgress(0);
+      setStatusMessage('Starting secure upload...');
+      const currentDocId = await uploadDocument(selectedFile, userId, percent => {
+        setUploadProgress(percent);
+        setStatusMessage(percent === 100 ? 'Upload transferred. Verifying stored PDF...' : `Uploading PDF: ${percent}%`);
       });
 
-      if (!uploadRes.ok) {
-        const errData = await uploadRes.json().catch(() => ({}));
-        throw new Error(errData.error || 'Upload failed. Please try again.');
-      }
-
-      const uploadData = await uploadRes.json();
-      const currentDocId = uploadData.document?.id;
-      if (!currentDocId) {
-        throw new Error('Server did not return a valid document ID.');
-      }
-
       setDocId(currentDocId);
+      setUploadVerified(true);
 
       // 2. Process Document (Page text extraction + OCR heuristics)
       setStage('EXTRACTING');
-      setStatusMessage('Extracting document pages and verifying text density...');
+      setStatusMessage('Upload completed and verified. Extracting document pages...');
 
       const processRes = await fetch('/api/process-document', {
         method: 'POST',
@@ -116,7 +96,9 @@ export default function DocumentIntake({
       }
 
       const processData = await processRes.json();
+      setExtractionCompleted(true);
       setExtractedPagesCount(processData.diagnostics?.total_pages || 0);
+      setStatusMessage('Text extraction completed. Starting qualification...');
 
       if (processData.status === 'OCR_REQUIRED') {
         setStage('OCR_REQUIRED');
@@ -127,10 +109,10 @@ export default function DocumentIntake({
       // 4. Trigger Qualification & Analysis
       await triggerAnalysis(currentDocId, false);
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Intake Pipeline Error:', err);
       setStage('FAILED');
-      setErrorMessage(err.message || 'An unexpected error occurred during processing.');
+      setErrorMessage(err instanceof Error ? err.message : 'An unexpected error occurred during processing.');
     }
   };
 
@@ -263,6 +245,9 @@ export default function DocumentIntake({
           <p className="text-[13px] text-[#667085] mt-0.5">
             Upload a procurement tender or RFP (PDF format, up to 10 MB).
           </p>
+          <p className="text-[12px] text-[#667085] mt-1">
+            Interrupted upload? Select the same PDF to resume or recover it.
+          </p>
         </div>
 
         {onCancel && stage === 'IDLE' && (
@@ -373,6 +358,11 @@ export default function DocumentIntake({
           <p className="text-[13px] text-[#667085] max-w-md mb-3">
             {statusMessage}
           </p>
+          {stage === 'UPLOADING' && (
+            <progress aria-label="PDF upload progress" value={uploadProgress} max={100} className="w-full max-w-sm mb-3" />
+          )}
+          {uploadVerified && <p className="text-[12px] text-[#027A48] mb-2">Upload completed and verified</p>}
+          {extractionCompleted && <p className="text-[12px] text-[#027A48] mb-2">Text extraction completed</p>}
 
           {extractedPagesCount > 0 && (
             <span className="text-[11.5px] font-mono text-[#475467] bg-white px-2.5 py-1 rounded border border-[#D9DEE5]">
@@ -542,7 +532,7 @@ export default function DocumentIntake({
             <div>
               <div className="flex items-center gap-2 text-[#B42318] mb-1">
                 <AlertCircle className="w-4 h-4 text-[#B42318]" strokeWidth={2} />
-                <span className="font-bold text-[14px]">Processing Failed</span>
+                <span className="font-bold text-[14px]">{uploadVerified ? 'Processing Failed' : 'Upload Failed'}</span>
               </div>
               {selectedFile && (
                 <p className="text-[13px] font-semibold text-[#111827] truncate">
@@ -573,12 +563,12 @@ export default function DocumentIntake({
             >
               Upload Another Document
             </button>
-            {docId && (
+            {selectedFile && (
               <button
-                onClick={() => triggerAnalysis(docId, true)}
+                onClick={handleStartIntake}
                 className="px-4 py-2 bg-[#111827] hover:bg-black text-white font-semibold text-[12.5px] rounded-sm transition-colors cursor-pointer shadow-xs flex items-center gap-1.5"
               >
-                <span>Retry Analysis</span>
+                <span>Retry Upload & Processing</span>
                 <ArrowRight className="w-3.5 h-3.5" strokeWidth={2} />
               </button>
             )}

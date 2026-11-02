@@ -495,7 +495,8 @@ export default function DocumentLibrary({ userId, userEmail, initialDocuments }:
                     <div className="flex items-center gap-2.5 text-[12px] text-[#667085] flex-wrap">
                       <span>{doc.total_pages > 0 ? `${doc.total_pages} pages` : 'Pending page audit'}</span>
                       <span className="w-1 h-1 rounded-full bg-[#98A2B3]" />
-                      <span>Uploaded {formatTimeAgo(doc.created_at)}</span>
+                      <span>{opStatus === 'UPLOAD_PENDING' ? 'Upload started' : 'Uploaded'} {formatTimeAgo(doc.created_at)}</span>
+                      {opStatus === 'UPLOAD_PENDING' && <span className="text-[#B54708]">Upload pending · Select the same PDF in Upload Tender to recover</span>}
 
                       {/* Operational Status Tag */}
                       {isCompleted && (

@@ -10,6 +10,7 @@ interface RawDocumentRecord {
   qualification_reason: string | null;
   document_type: string | null;
   created_at: string;
+  upload_verified_at: string | null;
   document_pages?: { count: number }[];
   analysis_runs?: {
     id: string;
@@ -32,6 +33,7 @@ export async function getUserDocumentsPayload(userId: string, supabase: Supabase
       qualification_reason,
       document_type,
       created_at,
+      upload_verified_at,
       document_pages(count),
       analysis_runs(id, status, started_at, completed_at, last_error)
     `)
@@ -82,7 +84,9 @@ export async function getUserDocumentsPayload(userId: string, supabase: Supabase
     const totalPages = doc.document_pages?.[0]?.count || 0;
 
     let operationalStatus: string = latestRun?.status || doc.status;
-    if (doc.qualification_status === 'AI_REJECTED' && latestRun?.status !== 'COMPLETED') {
+    if (!doc.upload_verified_at) {
+      operationalStatus = 'UPLOAD_PENDING';
+    } else if (doc.qualification_status === 'AI_REJECTED' && latestRun?.status !== 'COMPLETED') {
       operationalStatus = 'REJECTED';
     } else if (doc.qualification_status === 'AI_AMBIGUOUS' && (!latestRun || latestRun?.status !== 'COMPLETED')) {
       operationalStatus = 'AMBIGUOUS';
@@ -90,7 +94,9 @@ export async function getUserDocumentsPayload(userId: string, supabase: Supabase
 
     // Authoritative recommended action
     let recommendedAction = 'Review extracted requirements and bid criteria.';
-    if (doc.qualification_status === 'AI_REJECTED' || operationalStatus === 'REJECTED') {
+    if (operationalStatus === 'UPLOAD_PENDING') {
+      recommendedAction = 'Upload is incomplete or awaiting verification. Select the same PDF in Upload Tender to resume, or delete this pending document.';
+    } else if (doc.qualification_status === 'AI_REJECTED' || operationalStatus === 'REJECTED') {
       recommendedAction = 'Disqualified as non-RFP document. Review qualification details or perform manual override if this is a valid tender.';
     } else if (doc.qualification_status === 'AI_AMBIGUOUS' || operationalStatus === 'AMBIGUOUS') {
       recommendedAction = 'Ambiguous intake classification. Review candidate clauses, unindexed pages, and risk ledger before bidding.';
@@ -98,7 +104,9 @@ export async function getUserDocumentsPayload(userId: string, supabase: Supabase
       recommendedAction = 'Analysis complete. Inspect high-priority attention lanes, verify requirement quotes, and review coverage audit.';
     } else if (operationalStatus === 'FAILED') {
       recommendedAction = 'Analysis failed. Inspect error logs and re-trigger extraction pipeline.';
-    } else if (operationalStatus === 'UPLOADED' || operationalStatus === 'TEXT_EXTRACTED') {
+    } else if (operationalStatus === 'UPLOADED') {
+      recommendedAction = 'Upload verified. Text extraction has not started. Select the same PDF in Upload Tender to continue.';
+    } else if (operationalStatus === 'TEXT_EXTRACTED') {
       recommendedAction = 'Text extracted. Trigger analysis to classify requirements and detect risks.';
     }
 
